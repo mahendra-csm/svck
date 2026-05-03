@@ -3,7 +3,7 @@ services:
     name: svck-digital-backend
     runtime: python
     rootDir: backend
-    buildCommand: pip install --upgrade pip setuptools wheel cmake && pip install -r requirements.txt
+    buildCommand: apt-get install -y build-essential cmake libopenblas-dev liblapack-dev libx11-dev && pip install --upgrade pip setuptools wheel && pip install --prefer-binary -r requirements.txt
     startCommand: uvicorn server:app --host 0.0.0.0 --port $PORT
     envVars:
       - key: ENVIRONMENT
