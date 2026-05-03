@@ -25,15 +25,17 @@ type FirebaseAuthReactNativeModule = {
 // eslint-disable-next-line @typescript-eslint/no-require-imports
 const { getReactNativePersistence } = require('@firebase/auth') as FirebaseAuthReactNativeModule;
 
-// Firebase project configuration
+// Firebase client config is intentionally public in mobile apps — security
+// is enforced by Firebase Security Rules, not by hiding these values.
+// Set EXPO_PUBLIC_FIREBASE_* in your .env / EAS environment to override.
 const firebaseConfig = {
-  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY || 'AIzaSyAIpezPgkPuO1HJhNC0Lh2YQwFn3vysH6Y',
-  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN || 'facereactnative-2026.firebaseapp.com',
-  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID || 'facereactnative-2026',
-  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET || 'facereactnative-2026.firebasestorage.app',
-  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID || '924989343670',
-  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID || '1:924989343670:web:80c88f84304644402da317',
-  measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID || 'G-TTCLTK1PNM',
+  apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY ?? 'AIzaSyAIpezPgkPuO1HJhNC0Lh2YQwFn3vysH6Y',
+  authDomain: process.env.EXPO_PUBLIC_FIREBASE_AUTH_DOMAIN ?? 'facereactnative-2026.firebaseapp.com',
+  projectId: process.env.EXPO_PUBLIC_FIREBASE_PROJECT_ID ?? 'facereactnative-2026',
+  storageBucket: process.env.EXPO_PUBLIC_FIREBASE_STORAGE_BUCKET ?? 'facereactnative-2026.firebasestorage.app',
+  messagingSenderId: process.env.EXPO_PUBLIC_FIREBASE_MESSAGING_SENDER_ID ?? '924989343670',
+  appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID ?? '1:924989343670:web:80c88f84304644402da317',
+  measurementId: process.env.EXPO_PUBLIC_FIREBASE_MEASUREMENT_ID ?? 'G-TTCLTK1PNM',
 };
 
 // Initialize Firebase app (prevent re-initialization)

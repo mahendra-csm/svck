@@ -24,7 +24,6 @@
     },
     "android": {
       "package": "com.svck.digital.attendance",
-      "usesCleartextTraffic": true,
       "adaptiveIcon": {
         "foregroundImage": "./assets/images/adaptive-icon.png",
         "backgroundColor": "#000000"

@@ -9,7 +9,7 @@ services:
       - key: ENVIRONMENT
         value: production
       - key: TESTING_MODE
-        value: "true"
+        value: "false"
       - key: JWT_SECRET
         generateValue: true
       - key: ADMIN_EMAIL
@@ -26,5 +26,7 @@ services:
         value: "78.81842145279516"
       - key: CAMPUS_RADIUS_METERS
         value: "100"
-      - key: GROQ_API_KEY
+      - key: GEMINI_API_KEY
         sync: false
+      - key: GEMINI_MODEL
+        value: "gemini-1.5-flash"

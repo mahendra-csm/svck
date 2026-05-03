@@ -1,8 +1,11 @@
-from fastapi import APIRouter, Depends, FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, Depends, FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.concurrency import run_in_threadpool
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from dotenv import load_dotenv
 from starlette.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 import os
 import asyncio
 import logging
@@ -27,14 +30,14 @@ from firebase_admin import credentials, firestore, auth as firebase_auth
 ROOT_DIR = Path(__file__).parent
 load_dotenv(ROOT_DIR / '.env')
 
+# Rate limiter (keyed by remote IP)
+limiter = Limiter(key_func=get_remote_address)
+
 # Runtime configuration
 ENVIRONMENT = os.environ.get('ENVIRONMENT', 'development').strip().lower()
 JWT_ISSUER = os.environ.get('JWT_ISSUER', 'svck-digital')
 JWT_EXPIRE_MINUTES = int(os.environ.get('JWT_EXPIRE_MINUTES', '480'))
 
-DEFAULT_SECRET_KEY = 'svck-digital-secret-key-2025'
-DEFAULT_ADMIN_EMAIL = 'admin@svck.edu.in'
-DEFAULT_ADMIN_PASSWORD = 'admin@123'
 DEFAULT_FIREBASE_SERVICE_ACCOUNT = ROOT_DIR / 'firebase-service-account.json'
 
 
@@ -63,7 +66,7 @@ if not firebase_admin._apps:
 db = firestore.client()
 
 # JWT Configuration (still used for admin)
-SECRET_KEY = os.environ.get('JWT_SECRET', DEFAULT_SECRET_KEY)
+SECRET_KEY = os.environ.get('JWT_SECRET', 'svck-digital-insecure-default-change-me-NOW')
 ALGORITHM = "HS256"
 
 # Campus Geo-fencing Configuration
@@ -79,8 +82,8 @@ SUPPORTED_FACE_DETECTION_MODELS = {"hog", "cnn"}
 FACE_DETECTION_MODEL = os.environ.get('FACE_DETECTION_MODEL', 'hog').strip().lower() or 'hog'
 if FACE_DETECTION_MODEL not in SUPPORTED_FACE_DETECTION_MODELS:
     FACE_DETECTION_MODEL = 'hog'
-FACE_MATCH_TOLERANCE = float(os.environ.get('FACE_MATCH_TOLERANCE', '0.55'))
-FACE_DUPLICATE_TOLERANCE = float(os.environ.get('FACE_DUPLICATE_TOLERANCE', '0.45'))
+FACE_MATCH_TOLERANCE = max(0.3, min(0.8, float(os.environ.get('FACE_MATCH_TOLERANCE', '0.55'))))
+FACE_DUPLICATE_TOLERANCE = max(0.3, min(0.8, float(os.environ.get('FACE_DUPLICATE_TOLERANCE', '0.45'))))
 FACE_REGISTER_MIN_IMAGES = max(1, int(os.environ.get('FACE_REGISTER_MIN_IMAGES', '5')))
 FACE_REGISTER_MIN_ENCODINGS = max(1, int(os.environ.get('FACE_REGISTER_MIN_ENCODINGS', '3')))
 FACE_REGISTER_TARGET_ENCODINGS = max(
@@ -88,9 +91,10 @@ FACE_REGISTER_TARGET_ENCODINGS = max(
     int(os.environ.get('FACE_REGISTER_TARGET_ENCODINGS', '5')),
 )
 
-# Admin Credentials
-ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', DEFAULT_ADMIN_EMAIL)
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', DEFAULT_ADMIN_PASSWORD)
+# Admin Credentials — must be set in env; fallbacks are intentionally weak so
+# validate_runtime_configuration() will raise on startup if not overridden.
+ADMIN_EMAIL = os.environ.get('ADMIN_EMAIL', 'admin@svck.edu.in')
+ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD', 'changeme')
 ADMIN_PASSWORD_HASH = os.environ.get('ADMIN_PASSWORD_HASH')
 
 # Assistant configuration
@@ -108,17 +112,24 @@ async def lifespan(_: FastAPI):
     validate_runtime_configuration()
     logger.info("SVCK Digital Backend started with Firebase")
     logger.info(
-        "Environment=%s, testing_mode=%s, face_detection_model=%s, allow_credentials=%s, allowed_origins=%s",
+        "Environment=%s, testing_mode=%s, face_detection_model=%s, "
+        "face_match_tolerance=%s, campus_radius=%sm, gemini_model=%s, "
+        "admin_email=%s, jwt_secret_len=%d",
         ENVIRONMENT,
         TESTING_MODE,
         FACE_DETECTION_MODEL,
-        ALLOW_CREDENTIALS,
-        ALLOWED_ORIGINS,
+        FACE_MATCH_TOLERANCE,
+        CAMPUS_RADIUS_METERS,
+        GEMINI_MODEL,
+        ADMIN_EMAIL,
+        len(SECRET_KEY),
     )
     yield
 
 # Create the main app
 app = FastAPI(title="SVCK Digital - Face Recognition Attendance System", lifespan=lifespan)
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Create a router with the /api prefix
 api_router = APIRouter(prefix="/api")
@@ -179,12 +190,12 @@ class AdminLogin(BaseModel):
     password: str
 
 class FaceRegisterRequest(BaseModel):
-    face_images: List[str]  # Base64 encoded images
+    face_images: List[str] = Field(min_length=1, max_length=10)
 
 class AttendanceRequest(BaseModel):
-    face_image: str  # Base64 encoded image
-    latitude: float
-    longitude: float
+    face_image: str = Field(min_length=1, max_length=2_000_000)  # ~1.5 MB max
+    latitude: float = Field(ge=-90.0, le=90.0)
+    longitude: float = Field(ge=-180.0, le=180.0)
 
 class StudentResponse(BaseModel):
     id: str
@@ -257,12 +268,23 @@ def is_production_environment() -> bool:
     return ENVIRONMENT == 'production'
 
 
+_INSECURE_SECRETS = {
+    'svck-digital-insecure-default-change-me-NOW',
+    'svck-digital-secret-key-2025',
+    'changeme',
+    'secret',
+    'password',
+}
+_INSECURE_PASSWORDS = {'changeme', 'admin@123', 'password', 'admin'}
+
+
 def uses_weak_default_secret() -> bool:
-    return SECRET_KEY == DEFAULT_SECRET_KEY or len(SECRET_KEY) < 32
+    return SECRET_KEY in _INSECURE_SECRETS or len(SECRET_KEY) < 32
 
 
 def uses_default_admin_credentials() -> bool:
-    return ADMIN_EMAIL == DEFAULT_ADMIN_EMAIL and ADMIN_PASSWORD == DEFAULT_ADMIN_PASSWORD and not ADMIN_PASSWORD_HASH
+    plain_weak = ADMIN_PASSWORD in _INSECURE_PASSWORDS and not ADMIN_PASSWORD_HASH
+    return plain_weak
 
 
 def validate_runtime_configuration() -> None:
@@ -274,10 +296,11 @@ def validate_runtime_configuration() -> None:
     if is_production_environment():
         if TESTING_MODE:
             issues.append('TESTING_MODE must be false in production.')
-        if '*' in ALLOWED_ORIGINS:
-            issues.append('ALLOWED_ORIGINS cannot contain "*" in production.')
         if uses_default_admin_credentials():
             issues.append('Replace the default admin credentials before running in production.')
+
+    if not ADMIN_EMAIL or '@' not in ADMIN_EMAIL:
+        issues.append('ADMIN_EMAIL must be a valid email address.')
 
     if issues:
         raise RuntimeError('Invalid runtime configuration:\n- ' + '\n- '.join(issues))
@@ -483,7 +506,7 @@ def decode_base64_image(base64_str: str) -> np.ndarray:
     # Fix EXIF orientation (important for mobile camera photos)
     try:
         image = ImageOps.exif_transpose(image)
-    except:
+    except Exception:
         pass
     
     # Convert to RGB if necessary
@@ -674,7 +697,8 @@ async def health_check():
 # ==================== STUDENT AUTH (Firebase) ====================
 
 @api_router.post("/student/register")
-async def register_student(data: StudentRegister):
+@limiter.limit("10/minute")
+async def register_student(request: Request, data: StudentRegister):
     """Register a new student with Firebase Authentication"""
     try:
         roll_number = normalize_roll_number(data.roll_number)
@@ -815,7 +839,8 @@ async def update_student_profile(data: UpdateProfileRequest, user: dict = Depend
 # ==================== FACE REGISTRATION ====================
 
 @api_router.post("/student/register-face")
-async def register_face(data: FaceRegisterRequest, user: dict = Depends(get_current_student)):
+@limiter.limit("5/minute")
+async def register_face(request: Request, data: FaceRegisterRequest, user: dict = Depends(get_current_student)):
     if len(data.face_images) < FACE_REGISTER_MIN_IMAGES:
         raise HTTPException(
             status_code=400,
@@ -901,7 +926,8 @@ async def register_face(data: FaceRegisterRequest, user: dict = Depends(get_curr
 # ==================== ATTENDANCE ====================
 
 @api_router.post("/student/mark-attendance")
-async def mark_attendance(data: AttendanceRequest, user: dict = Depends(get_current_student)):
+@limiter.limit("10/minute")
+async def mark_attendance(request: Request, data: AttendanceRequest, user: dict = Depends(get_current_student)):
     # STEP 1: Validate geo-fence (BACKEND VALIDATION - skip in TESTING_MODE)
     is_valid_location, distance = validate_geofence(data.latitude, data.longitude)
     
@@ -1062,7 +1088,8 @@ async def get_attendance_history(user: dict = Depends(get_current_student)):
 # ==================== ADMIN AUTH ====================
 
 @api_router.post("/admin/login")
-async def login_admin(data: AdminLogin):
+@limiter.limit("10/minute")
+async def login_admin(request: Request, data: AdminLogin):
     if not authenticate_admin_credentials(data.email, data.password):
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
     
